@@ -1,0 +1,7 @@
+{
+  "openapi_url": "http://170.187.250.145/openapi.json",
+  "base_url": "http://170.187.250.145",
+  "output_collection": "postman_collection.json",
+  "output_environment": "postman_environment.json"
+}
+

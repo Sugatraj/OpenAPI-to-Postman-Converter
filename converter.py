@@ -6,6 +6,7 @@ with automatic bearer token management and environment variables.
 """
 
 import json
+import os
 import requests
 from typing import Dict, List, Any, Optional
 
@@ -19,6 +20,7 @@ class OpenAPIToPostmanConverter:
         self.openapi_spec = None
         self.postman_collection = None
         self.postman_environments = None
+        self.project_folder = None
     
     def _load_config(self, config_file: str) -> Dict:
         """Load configuration from JSON file."""
@@ -414,15 +416,37 @@ class OpenAPIToPostmanConverter:
         print(f"✓ Generated {len(roles)} environments: {', '.join([f'{r}' for r in roles])}")
         return True
     
+    def _get_project_name(self) -> str:
+        """Get the project name from OpenAPI spec title."""
+        if not self.openapi_spec:
+            return "API_Project"
+        
+        api_title = self.openapi_spec.get("info", {}).get("title", "API_Project")
+        # Sanitize folder name: remove special characters, replace spaces with underscores
+        folder_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in api_title)
+        folder_name = folder_name.replace(' ', '_').strip('_')
+        return folder_name if folder_name else "API_Project"
+    
     def save_files(self) -> bool:
-        """Save Postman collection and environment files."""
+        """Save Postman collection and environment files in JSON/PROJECT_NAME folder."""
         if not self.postman_collection or not self.postman_environments:
             print("✗ No collection or environments to save")
             return False
         
         try:
+            # Get project name from OpenAPI spec
+            project_name = self._get_project_name()
+            
+            # Create nested folder structure: JSON/PROJECT_NAME/
+            output_folder = os.path.join("JSON", project_name)
+            
+            # Create folder if it doesn't exist
+            if not os.path.exists(output_folder):
+                os.makedirs(output_folder)
+                print(f"✓ Created output folder: {output_folder}/")
+            
             # Save collection
-            collection_file = self.config["output_collection"]
+            collection_file = os.path.join(output_folder, self.config["output_collection"])
             with open(collection_file, 'w', encoding='utf-8') as f:
                 json.dump(self.postman_collection, f, indent=2, ensure_ascii=False)
             print(f"✓ Collection saved: {collection_file}")
@@ -430,10 +454,13 @@ class OpenAPIToPostmanConverter:
             # Save environments (one for each role)
             roles = ["admin", "teacher", "student"]
             for i, role in enumerate(roles):
-                environment_file = f"postman_environment_{role}.json"
+                environment_file = os.path.join(output_folder, f"postman_environment_{role}.json")
                 with open(environment_file, 'w', encoding='utf-8') as f:
                     json.dump(self.postman_environments[i], f, indent=2, ensure_ascii=False)
                 print(f"✓ Environment saved: {environment_file}")
+            
+            # Store folder name for success message
+            self.project_folder = output_folder
             
             return True
         except IOError as e:
@@ -472,17 +499,20 @@ class OpenAPIToPostmanConverter:
         print("✓ Conversion Complete!")
         print("=" * 70)
         print()
+        print(f"📁 All files saved in: {self.project_folder}/")
+        print()
         print("Generated Files:")
-        print(f"  📄 {self.config['output_collection']}")
-        print("  📄 postman_environment_admin.json")
-        print("  📄 postman_environment_teacher.json")
-        print("  📄 postman_environment_student.json")
+        print(f"  📄 {self.project_folder}/{self.config['output_collection']}")
+        print(f"  📄 {self.project_folder}/postman_environment_admin.json")
+        print(f"  📄 {self.project_folder}/postman_environment_teacher.json")
+        print(f"  📄 {self.project_folder}/postman_environment_student.json")
         print()
         print("=" * 70)
         print("Next Steps:")
         print("=" * 70)
         print("  1. Open Postman")
-        print(f"  2. Import all 4 files (collection + 3 environments)")
+        print(f"  2. Import all 4 files from '{self.project_folder}/' folder")
+        print("     (collection + 3 environments)")
         print()
         print("  3. Login for each role:")
         print("     • Select 'Admin' environment → Login with admin credentials")

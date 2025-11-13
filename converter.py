@@ -18,7 +18,7 @@ class OpenAPIToPostmanConverter:
         self.config = self._load_config(config_file)
         self.openapi_spec = None
         self.postman_collection = None
-        self.postman_environment = None
+        self.postman_environments = None
     
     def _load_config(self, config_file: str) -> Dict:
         """Load configuration from JSON file."""
@@ -351,55 +351,73 @@ class OpenAPIToPostmanConverter:
         print(f"✓ Converted {endpoint_count} endpoints into {len(tag_groups)} groups")
         return True
     
-    def generate_environment(self) -> bool:
-        """Generate Postman environment file."""
+    def generate_environments(self) -> bool:
+        """Generate Postman environment files for Admin, Teacher, and Student roles."""
         if not self.openapi_spec:
             print("✗ No OpenAPI specification loaded")
             return False
         
         api_title = self.openapi_spec.get("info", {}).get("title", "API")
         
-        self.postman_environment = {
-            "id": "auto-generated-env",
-            "name": f"{api_title} Environment",
-            "values": [
-                {
-                    "key": "base_url",
-                    "value": self.config["base_url"],
-                    "type": "default",
-                    "enabled": True
-                },
-                {
-                    "key": "access_token",
-                    "value": "",
-                    "type": "secret",
-                    "enabled": True
-                },
-                {
-                    "key": "token_expiry",
-                    "value": "",
-                    "type": "default",
-                    "enabled": True
-                },
-                {
-                    "key": "user_id",
-                    "value": "",
-                    "type": "default",
-                    "enabled": True
-                }
-            ],
-            "_postman_variable_scope": "environment",
-            "_postman_exported_at": "",
-            "_postman_exported_using": "OpenAPI to Postman Converter"
-        }
+        # Define roles
+        roles = ["Admin", "Teacher", "Student"]
+        self.postman_environments = []
         
-        print(f"✓ Generated environment: {api_title} Environment")
+        for role in roles:
+            environment = {
+                "id": f"auto-generated-env-{role.lower()}",
+                "name": f"{api_title} Environment ({role})",
+                "values": [
+                    {
+                        "key": "base_url",
+                        "value": self.config["base_url"],
+                        "type": "default",
+                        "enabled": True
+                    },
+                    {
+                        "key": "access_token",
+                        "value": "",
+                        "type": "secret",
+                        "enabled": True
+                    },
+                    {
+                        "key": "token_expiry",
+                        "value": "",
+                        "type": "default",
+                        "enabled": True
+                    },
+                    {
+                        "key": "user_id",
+                        "value": "",
+                        "type": "default",
+                        "enabled": True
+                    },
+                    {
+                        "key": "role",
+                        "value": role.lower(),
+                        "type": "default",
+                        "enabled": True
+                    },
+                    {
+                        "key": "mobile",
+                        "value": "",
+                        "type": "default",
+                        "enabled": True
+                    }
+                ],
+                "_postman_variable_scope": "environment",
+                "_postman_exported_at": "",
+                "_postman_exported_using": "OpenAPI to Postman Converter"
+            }
+            self.postman_environments.append(environment)
+        
+        print(f"✓ Generated {len(roles)} environments: {', '.join([f'{r}' for r in roles])}")
         return True
     
     def save_files(self) -> bool:
-        """Save Postman collection and environment to JSON files."""
-        if not self.postman_collection or not self.postman_environment:
-            print("✗ No collection or environment to save")
+        """Save Postman collection and environment files."""
+        if not self.postman_collection or not self.postman_environments:
+            print("✗ No collection or environments to save")
             return False
         
         try:
@@ -409,11 +427,13 @@ class OpenAPIToPostmanConverter:
                 json.dump(self.postman_collection, f, indent=2, ensure_ascii=False)
             print(f"✓ Collection saved: {collection_file}")
             
-            # Save environment
-            environment_file = self.config["output_environment"]
-            with open(environment_file, 'w', encoding='utf-8') as f:
-                json.dump(self.postman_environment, f, indent=2, ensure_ascii=False)
-            print(f"✓ Environment saved: {environment_file}")
+            # Save environments (one for each role)
+            roles = ["admin", "teacher", "student"]
+            for i, role in enumerate(roles):
+                environment_file = f"postman_environment_{role}.json"
+                with open(environment_file, 'w', encoding='utf-8') as f:
+                    json.dump(self.postman_environments[i], f, indent=2, ensure_ascii=False)
+                print(f"✓ Environment saved: {environment_file}")
             
             return True
         except IOError as e:
@@ -437,8 +457,8 @@ class OpenAPIToPostmanConverter:
             return False
         print()
         
-        # Step 3: Generate environment
-        if not self.generate_environment():
+        # Step 3: Generate environments
+        if not self.generate_environments():
             return False
         print()
         
@@ -452,13 +472,29 @@ class OpenAPIToPostmanConverter:
         print("✓ Conversion Complete!")
         print("=" * 70)
         print()
+        print("Generated Files:")
+        print(f"  📄 {self.config['output_collection']}")
+        print("  📄 postman_environment_admin.json")
+        print("  📄 postman_environment_teacher.json")
+        print("  📄 postman_environment_student.json")
+        print()
+        print("=" * 70)
         print("Next Steps:")
+        print("=" * 70)
         print("  1. Open Postman")
-        print(f"  2. Import '{self.config['output_collection']}'")
-        print(f"  3. Import '{self.config['output_environment']}'")
-        print("  4. Select the imported environment from the dropdown")
-        print("  5. Call /common/login → /common/verify to get your token")
-        print("  6. Token will be automatically saved and used in all requests!")
+        print(f"  2. Import all 4 files (collection + 3 environments)")
+        print()
+        print("  3. Login for each role:")
+        print("     • Select 'Admin' environment → Login with admin credentials")
+        print("     • Select 'Teacher' environment → Login with teacher credentials")
+        print("     • Select 'Student' environment → Login with student credentials")
+        print()
+        print("  4. Switch between roles instantly using environment dropdown!")
+        print("     Each role maintains its own token - no need to re-login!")
+        print()
+        print("Authentication Flow:")
+        print("  POST /common/login   → Get OTP")
+        print("  POST /common/verify  → Token auto-saved ✨")
         print()
         
         return True

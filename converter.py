@@ -110,6 +110,19 @@ class OpenAPIToPostmanConverter:
         
         return example
     
+    def _is_public_endpoint(self, path: str) -> bool:
+        """Check if endpoint is public (doesn't require authentication)."""
+        public_paths = [
+            "/common/signup",
+            "/common/login",
+            "/common/verify",
+            "/",
+            "/docs",
+            "/openapi.json",
+            "/redoc"
+        ]
+        return any(path.startswith(public_path) for public_path in public_paths)
+    
     def _convert_endpoint_to_postman(self, path: str, method: str, details: Dict) -> Dict:
         """Convert a single API endpoint to Postman request format."""
         request_item = {
@@ -135,8 +148,13 @@ class OpenAPIToPostmanConverter:
         if details.get("description"):
             request_item["request"]["description"] = details["description"]
         
-        # Add authentication for secured endpoints
-        if "security" in details and details["security"]:
+        # Set authentication: ALL endpoints get bearer auth EXCEPT public endpoints
+        # This ensures bearer token is always forwarded unless explicitly excluded
+        is_public = self._is_public_endpoint(path)
+        
+        if not is_public:
+            # Explicitly set bearer auth for all non-public endpoints
+            # This ensures token is always forwarded, even if OpenAPI doesn't specify security
             request_item["request"]["auth"] = {
                 "type": "bearer",
                 "bearer": [
@@ -146,6 +164,11 @@ class OpenAPIToPostmanConverter:
                         "type": "string"
                     }
                 ]
+            }
+        else:
+            # Explicitly set "no auth" for public endpoints to override collection-level auth
+            request_item["request"]["auth"] = {
+                "type": "noauth"
             }
         
         # Handle path and query parameters
@@ -189,6 +212,16 @@ class OpenAPIToPostmanConverter:
                 
                 if schema:
                     example_body = self._generate_example_body(schema)
+                    
+                    # Special handling for /common/verify endpoint
+                    if path == "/common/verify":
+                        # Use {{mobile}} variable for mobile number
+                        if "mobile" in example_body:
+                            example_body["mobile"] = "{{mobile}}"
+                        # Set default OTP to 1234 for easy testing
+                        if "otp" in example_body:
+                            example_body["otp"] = "1234"
+                    
                     request_item["request"]["body"] = {
                         "mode": "raw",
                         "raw": json.dumps(example_body, indent=2),
@@ -198,6 +231,75 @@ class OpenAPIToPostmanConverter:
                             }
                         }
                     }
+        
+        # Add pre-request script for verify endpoint to auto-fill mobile
+        if path == "/common/verify":
+            if "event" not in request_item:
+                request_item["event"] = []
+            
+            request_item["event"].append({
+                "listen": "prerequest",
+                "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                        "// Auto-fill mobile number from environment",
+                        "// This ensures the mobile from login is automatically used in verify request",
+                        "",
+                        "const savedMobile = pm.environment.get('mobile');",
+                        "",
+                        "if (savedMobile && savedMobile.trim() !== '') {",
+                        "    try {",
+                        "        // Get current body - handle both string and object formats",
+                        "        let bodyText = pm.request.body ? pm.request.body.raw : '{}';",
+                        "        if (!bodyText || bodyText.trim() === '') {",
+                        "            bodyText = '{\"mobile\": \"\", \"otp\": \"1234\"}';",
+                        "        }",
+                        "        ",
+                        "        // Replace {{mobile}} variable first",
+                        "        bodyText = bodyText.replace(/\\{\\{mobile\\}\\}/g, savedMobile);",
+                        "        ",
+                        "        // Parse JSON",
+                        "        let body = {};",
+                        "        try {",
+                        "            body = JSON.parse(bodyText);",
+                        "        } catch (e) {",
+                        "            // If parsing fails, create new body",
+                        "            body = { mobile: savedMobile, otp: '1234' };",
+                        "        }",
+                        "        ",
+                        "        // Force update mobile field",
+                        "        body.mobile = savedMobile;",
+                        "        ",
+                        "        // Ensure OTP is set",
+                        "        if (!body.otp) {",
+                        "            body.otp = '1234';",
+                        "        }",
+                        "        ",
+                        "        // Update request body - use the correct method",
+                        "        const updatedBody = JSON.stringify(body, null, 2);",
+                        "        pm.request.body.update({",
+                        "            mode: 'raw',",
+                        "            raw: updatedBody,",
+                        "            options: { raw: { language: 'json' } }",
+                        "        });",
+                        "        ",
+                        "        console.log(`✅ Auto-filled mobile number: ${savedMobile}`);",
+                        "        console.log(`✅ Request body updated successfully`);",
+                        "        console.log(`✅ Verify request ready - OTP is pre-filled as 1234`);",
+                        "    } catch (e) {",
+                        "        console.log('❌ Error auto-filling mobile:', e.message);",
+                        "        console.log('Stack:', e.stack);",
+                        "        console.log('ℹ️  Please enter mobile number manually');",
+                        "    }",
+                        "} else {",
+                        "    console.log('⚠️  WARNING: No mobile number found in environment!');",
+                        "    console.log('⚠️  Please call /common/login first to save mobile number');",
+                        "    console.log('ℹ️  Current environment:', pm.environment.name);",
+                        "    console.log('ℹ️  Available variables:', Object.keys(pm.environment.toObject()));",
+                        "}"
+                    ]
+                }
+            })
         
         # Add empty response array (Postman format)
         request_item["response"] = []
@@ -212,20 +314,42 @@ class OpenAPIToPostmanConverter:
                 "script": {
                     "type": "text/javascript",
                     "exec": [
-                        "// Pre-request Script: Token Validation",
+                        "// Pre-request Script: Token Validation and Bearer Auth Setup",
                         "// This script runs before every request in the collection",
                         "",
                         "const token = pm.environment.get('access_token');",
                         "const tokenExpiry = pm.environment.get('token_expiry');",
+                        "const requestUrl = pm.request.url.toString();",
+                        "const isPublicEndpoint = requestUrl.includes('/common/login') || ",
+                        "                          requestUrl.includes('/common/verify') || ",
+                        "                          requestUrl.includes('/common/signup') || ",
+                        "                          requestUrl === pm.environment.get('base_url') + '/' || ",
+                        "                          requestUrl.includes('/docs') || ",
+                        "                          requestUrl.includes('/openapi.json');",
                         "",
-                        "// Check if token exists and is not expired",
-                        "if (!token) {",
-                        "    console.log('⚠️  No access token found. Please login first.');",
-                        "} else if (tokenExpiry && Date.now() > parseInt(tokenExpiry)) {",
-                        "    console.log('⚠️  Access token has expired. Please login again.');",
-                        "    pm.environment.set('access_token', '');",
+                        "// Only check token for non-public endpoints",
+                        "if (!isPublicEndpoint) {",
+                        "    if (!token || token.trim() === '') {",
+                        "        console.log('⚠️  WARNING: No access token found!');",
+                        "        console.log('⚠️  This request may fail with 401 Unauthorized');",
+                        "        console.log('⚠️  Please login first using /common/login → /common/verify');",
+                        "    } else if (tokenExpiry && Date.now() > parseInt(tokenExpiry)) {",
+                        "        console.log('⚠️  WARNING: Access token has expired!');",
+                        "        console.log('⚠️  Please login again using /common/login → /common/verify');",
+                        "        pm.environment.set('access_token', '');",
+                        "    } else {",
+                        "        // Verify bearer auth is configured",
+                        "        const auth = pm.request.auth;",
+                        "        if (auth && auth.type === 'bearer') {",
+                        "            console.log('✅ Bearer token will be sent in Authorization header');",
+                        "            console.log(`✅ Token length: ${token.length} characters`);",
+                        "        } else {",
+                        "            console.log('⚠️  WARNING: Bearer auth not configured for this request!');",
+                        "            console.log('⚠️  Token exists but may not be forwarded to API');",
+                        "        }",
+                        "    }",
                         "} else {",
-                        "    console.log('✓ Access token is valid');",
+                        "    console.log('ℹ️  Public endpoint - no authentication required');",
                         "}"
                     ]
                 }
@@ -299,6 +423,29 @@ class OpenAPIToPostmanConverter:
                         "        } else if (response.data && response.data.user_id) {",
                         "            pm.environment.set('user_id', response.data.user_id.toString());",
                         "            console.log('✅ User ID saved from data field');",
+                        "        }",
+                        "        ",
+                        "        // Save mobile number from /common/login request",
+                        "        if (requestUrl.includes('/common/login')) {",
+                        "            try {",
+                        "                const requestBody = pm.request.body.raw;",
+                        "                if (requestBody) {",
+                        "                    const loginData = JSON.parse(requestBody);",
+                        "                    if (loginData.mobile) {",
+                        "                        const mobileValue = loginData.mobile.toString().trim();",
+                        "                        pm.environment.set('mobile', mobileValue);",
+                        "                        console.log(`✅ Mobile number saved to environment: ${mobileValue}`);",
+                        "                        console.log(`✅ This mobile will be auto-filled in verify request`);",
+                        "                        console.log(`✅ You can now call /common/verify without entering mobile`);",
+                        "                    } else {",
+                        "                        console.log('⚠️  No mobile field found in login request body');",
+                        "                    }",
+                        "                } else {",
+                        "                    console.log('⚠️  Login request body is empty');",
+                        "                }",
+                        "            } catch (e) {",
+                        "                console.log('⚠️  Could not parse login request body:', e.message);",
+                        "            }",
                         "        }",
                         "        ",
                         "        // Special handling for /common/verify endpoint",
